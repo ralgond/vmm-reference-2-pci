@@ -1,0 +1,22 @@
+[package]
+name = "vmm-reference-2-pci"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# rust-vmm core crates
+kvm-ioctls = "0.19"
+kvm-bindings = { version = "0.10", features = ["fam-wrappers"] }
+vm-memory = { version = "0.14", features = ["backend-mmap"] }
+linux-loader = "0.11"
+vmm-sys-util = "0.12"
+
+# ELF parsing
+elf = "0.7"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
