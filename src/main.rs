@@ -332,11 +332,29 @@ fn setup_page_tables(mem: &GuestMemoryMmap) {
 
 fn setup_sregs(vcpu: &kvm_ioctls::VcpuFd) {
     let mut sregs = vcpu.get_sregs().unwrap();
+
+    // selector: 0x08,   // GDT 第 1 个描述符（index=1, TI=0, RPL=0）
+    // type_: 0x0b,      // 1011 = 可执行、可读、已访问（Code Segment）
+    // s: 1,             // 非系统段（普通代码/数据段）
+    // l: 1,             // ← 64位模式的关键！Long Mode
+    // db: 0,            // l=1 时 db 必须为 0
+    // dpl: 0,           // Ring 0（内核态）
+    // present: 1,       // 段存在
+    // g: 1,             // 粒度=4KB，limit 单位是页
+    // limit: 0xffff_ffff // 4GB 段长
     let cs = kvm_bindings::kvm_segment {
         base: 0, limit: 0xffff_ffff, selector: 0x08,
         type_: 0x0b, present: 1, dpl: 0, db: 0, s: 1, l: 1, g: 1, avl: 0,
         ..Default::default()
     };
+
+    // selector: 0x10,   // GDT 第 2 个描述符（index=2）
+    // type_: 0x03,      // 0011 = 可读写、已访问（Data Segment）
+    // s: 1,             // 非系统段
+    // db: 1,            // 32位默认操作数大小（数据段用 db，不用 l）
+    // l: 0,
+    // dpl: 0,           // Ring 0
+    // g: 1, present: 1
     let ds = kvm_bindings::kvm_segment {
         base: 0, limit: 0xffff_ffff, selector: 0x10,
         type_: 0x03, present: 1, dpl: 0, db: 1, s: 1, l: 0, g: 1, avl: 0,
@@ -345,9 +363,52 @@ fn setup_sregs(vcpu: &kvm_ioctls::VcpuFd) {
     sregs.cs = cs;
     sregs.ds = ds; sregs.es = ds; sregs.fs = ds; sregs.gs = ds; sregs.ss = ds;
     sregs.cr3  = PML4_ADDR;
+
+    /*
+    ### CR0 = `0x8005_0033`（1000 0000 0000 0101 0000 0000 0011 0011）
+    | 位 | 名称 | 值 | 含义 |
+    |----|----|---|------|
+    | 31 | PG | 1 | **开启分页** |
+    | 18 | AM | 1 | 对齐检查掩码 |
+    | 16 | WP | 1 | 写保护（Ring0不能写只读页）|
+    | 5  | NE | 1 | x87 异常本地处理 |
+    | 4  | ET | 1 | 扩展类型（固定为1）|
+    | 1  | MP | 1 | 监控协处理器 |
+    | 0  | PE | 1 | **开启保护模式** |
+    PE=1 + PG=1 是进入保护/分页模式的两个核心开关。
+    ---
+    */
     sregs.cr0  = 0x8005_0033;
+
+    /*
+    ### CR4 = `0x0000_02a0` (0010 1010 0000)
+    | 位 | 名称 | 值 | 含义 |
+    |----|----|----|------|
+    | 9  | OSFXSR | 1 | 支持 SSE 指令 |
+    | 7  | PGE    | 1 | 页全局使能（TLB 优化）|
+    | 5  | PAE    | 1 | **物理地址扩展**，Long Mode 必须开启 |
+
+    PAE=1 是启用 64 位分页（PML4）的前提条件。
+    ---
+    */
     sregs.cr4  = 0x0000_02a0;
+
+    /*
+    ### EFER = `0x0501` （0101 0000 0001）
+
+    EFER 是 MSR 寄存器（`0xC000_0080`），控制 Long Mode：
+
+    | 位 | 名称 | 值 | 含义 |
+    |----|----|----|------|
+    | 10 | LMA | 1 | Long Mode **已激活**（硬件置位，确认生效）|
+    | 8  | LME | 1 | Long Mode **使能**（软件请求）|
+    | 0  | SCE | 1 | 开启 `syscall`/`sysret` 指令 |
+
+    LME + LMA 同时为 1，表示 CPU 确实已进入 64-bit Long Mode。
+
+    ---*/
     sregs.efer = 0x0501;
+
     vcpu.set_sregs(&sregs).unwrap();
 }
 
